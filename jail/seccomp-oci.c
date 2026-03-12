@@ -153,6 +153,7 @@ static uint32_t resolve_architecture(char *archname)
 
 enum {
 	OCI_LINUX_SECCOMP_DEFAULTACTION,
+	OCI_LINUX_SECCOMP_DEFAULTERRNO,
 	OCI_LINUX_SECCOMP_ARCHITECTURES,
 	OCI_LINUX_SECCOMP_FLAGS,
 	OCI_LINUX_SECCOMP_SYSCALLS,
@@ -161,6 +162,7 @@ enum {
 
 static const struct blobmsg_policy oci_linux_seccomp_policy[] = {
 	[OCI_LINUX_SECCOMP_DEFAULTACTION] = { "defaultAction", BLOBMSG_TYPE_STRING },
+	[OCI_LINUX_SECCOMP_DEFAULTERRNO] = { "defaultErrnoRet", BLOBMSG_TYPE_INT32 },
 	[OCI_LINUX_SECCOMP_ARCHITECTURES] = { "architectures", BLOBMSG_TYPE_ARRAY },
 	[OCI_LINUX_SECCOMP_FLAGS] = { "flags", BLOBMSG_TYPE_ARRAY },
 	[OCI_LINUX_SECCOMP_SYSCALLS] = { "syscalls", BLOBMSG_TYPE_ARRAY },
@@ -220,6 +222,14 @@ struct sock_fprog *parseOCIlinuxseccomp(struct blob_attr *msg)
 	}
 
 	default_policy = resolve_action(blobmsg_get_string(tb[OCI_LINUX_SECCOMP_DEFAULTACTION]));
+	if (tb[OCI_LINUX_SECCOMP_DEFAULTERRNO]) {
+		if (default_policy != SECCOMP_RET_ERRNO)
+			return NULL;
+
+		default_policy = SECCOMP_RET_ERROR(blobmsg_get_u32(
+				tb[OCI_LINUX_SECCOMP_DEFAULTERRNO]));
+	} else if (default_policy == SECCOMP_RET_ERRNO)
+		default_policy = SECCOMP_RET_ERROR(EPERM);
 
 	/* verify architecture while ignoring the x86_64 anomaly for now */
 	if (tb[OCI_LINUX_SECCOMP_ARCHITECTURES]) {
