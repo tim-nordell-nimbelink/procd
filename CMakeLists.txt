@@ -108,7 +108,7 @@ SET(SOURCES_OCI_SECCOMP jail/seccomp-oci.c)
 ENDIF()
 
 IF(JAIL_SUPPORT)
-ADD_EXECUTABLE(ujail jail/jail.c jail/cgroups.c jail/cgroups-bpf.c jail/elf.c jail/fs.c jail/capabilities.c jail/netifd.c jail/ubus.c ${SOURCES_OCI_SECCOMP})
+ADD_EXECUTABLE(ujail jail/jail.c jail/cgroups.c jail/cgroups-bpf.c jail/elf.c jail/fs.c jail/capabilities.c jail/netifd.c jail/ubus.c jail/ubus_obj_id_cache.c ${SOURCES_OCI_SECCOMP})
 TARGET_LINK_LIBRARIES(ujail ${ubox} ${ubus} ${uci} ${blobmsg_json})
 INSTALL(TARGETS ujail
 	RUNTIME DESTINATION ${CMAKE_INSTALL_SBINDIR}

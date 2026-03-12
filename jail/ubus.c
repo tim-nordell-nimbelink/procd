@@ -28,12 +28,17 @@
 #include <ubusmsg.h>
 
 #include "ubus.h"
+#include "ubus_obj_id_cache.h"
 #include "log.h"
 
 static const char UBUS_UNIX_SOCKET[] = "/var/run/ubus/ubus.sock";
 
 struct ubus_relay_server {
+	struct ubus_context ubus;
+	struct uloop_timeout ubus_reconnect_tmo;
 	struct uloop_fd fd;
+	struct ubus_obj_id_cache id_cache;
+	uint32_t session_obj_id;
 };
 
 struct ubus_forward_fd_ctx
@@ -376,6 +381,54 @@ static void ubus_relay_server_cb(struct uloop_fd *fd, unsigned int events)
 	return;
 }
 
+static void ubus_relay_ubus_disconnected(struct ubus_context *ctx) {
+	struct ubus_relay_server *server = container_of(ctx, struct ubus_relay_server, ubus);
+
+	INFO("Disconnected from ubus\n");
+	uloop_fd_delete(&ctx->sock);
+	uloop_timeout_set(&server->ubus_reconnect_tmo, 1000);
+	ubus_obj_id_cache_ubus_disconnected(&server->id_cache, &server->ubus);
+}
+
+static void ubus_relay_ubus_connected(struct ubus_relay_server *server) {
+	INFO("Reconnected to ubus\n");
+	server->session_obj_id = 0;
+	uloop_fd_add(&server->ubus.sock, ULOOP_BLOCKING | ULOOP_READ | ULOOP_ERROR_CB);
+	ubus_obj_id_cache_ubus_connected(&server->id_cache, &server->ubus);
+	server->ubus.connection_lost = ubus_relay_ubus_disconnected;
+}
+
+static void ubus_relay_ubus_timeout(struct uloop_timeout *ctx) {
+	struct ubus_relay_server *server = container_of(ctx, struct ubus_relay_server, ubus_reconnect_tmo);
+	if (ubus_connect_ctx(&server->ubus, NULL) == 0) {
+		ubus_relay_ubus_connected(server);
+	} else {
+		uloop_timeout_set(&server->ubus_reconnect_tmo, 1000);
+	}
+}
+
+static void ubus_relay_monitor_objs(
+	struct ubus_obj_id_cache *cache,
+	enum UBUS_OBJ_ID_CACHE method,
+	uint32_t id,
+	const char *path
+) {
+	struct ubus_relay_server *server = container_of(cache, struct ubus_relay_server, id_cache);
+	if (strcmp(path, "session") == 0) {
+		switch(method)
+		{
+			case UBUS_OBJ_ID_CACHE_ADDED:
+				INFO("Session Object ID: %08x\n", id);
+				server->session_obj_id = id;
+				break;
+			case UBUS_OBJ_ID_CACHE_REMOVED:
+				INFO("Session Object is gone\n");
+				server->session_obj_id = 0;
+				break;
+		}
+	}
+}
+
 bool ubus_create_relay(pid_t pid)
 {
 	struct ubus_relay_server *server;
@@ -410,6 +463,15 @@ bool ubus_create_relay(pid_t pid)
 		free(server);
 		return false;
 	}
+
+	ubus_obj_id_cache_init(&server->id_cache, ubus_relay_monitor_objs);
+
+	/* Note: We'd use ubus_auto_connect(...) but it's currently broken
+	* since the uloop_fd_add() call added doesn't pass in ULOOP_ERROR_CB.
+	*/
+	server->ubus.connection_lost = ubus_relay_ubus_disconnected;
+	server->ubus_reconnect_tmo.cb = ubus_relay_ubus_timeout;
+	uloop_timeout_set(&server->ubus_reconnect_tmo, 0);
 
 	return true;
 }
