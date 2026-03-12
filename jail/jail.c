@@ -21,6 +21,7 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <sys/syscall.h>
 
 /* musl only defined 15 limit types, make sure all 16 are supported */
 #ifndef RLIMIT_RTTIME
@@ -173,7 +174,17 @@ static char child_stack[STACK_SIZE];
 static struct ubus_context *parent_ctx;
 
 int console_fd;
+int jail_pidfd;
 
+static inline int pidfd_open(pid_t pid, unsigned int flags)
+{
+	return syscall(SYS_pidfd_open, pid, flags);
+}
+
+static inline int pidfd_send_signal(int pidfd, int sig, siginfo_t *info, unsigned int flags)
+{
+	return syscall(SYS_pidfd_send_signal, pidfd, sig, info, flags);
+}
 
 static inline bool has_namespaces(void)
 {
@@ -1116,7 +1127,7 @@ static struct uloop_process jail_process = {
 static void jail_process_timeout_cb(struct uloop_timeout *t)
 {
 	DEBUG("jail process failed to stop, sending SIGKILL\n");
-	kill(jail_process.pid, SIGKILL);
+	pidfd_send_signal(jail_pidfd, SIGKILL, NULL, 0);
 }
 
 static void jail_handle_signal(int signo)
@@ -1131,7 +1142,7 @@ static void jail_handle_signal(int signo)
 
 	if (jail_running) {
 		DEBUG("forwarding signal %d to the jailed process\n", signo);
-		kill(jail_process.pid, signo);
+		pidfd_send_signal(jail_pidfd, signo, NULL, 0);
 		/* set timeout to send SIGKILL jail process in case SIGTERM doesn't succeed */
 		if (signo == SIGTERM)
 			uloop_timeout_set(&jail_process_timeout, opts.term_timeout * 1000);
@@ -3065,6 +3076,8 @@ static void post_main(struct uloop_timeout *t)
 		/* parent process */
 		char sig_buf[1];
 
+		jail_pidfd = pidfd_open(jail_process.pid, 0);
+
 		uloop_process_add(&jail_process);
 		jail_running = 1;
 		if (seteuid(0)) {
@@ -3196,7 +3209,7 @@ static void post_poststart(void)
 	uloop_run(); /* idle here while jail is running */
 	if (jail_running) {
 		DEBUG("uloop interrupted, killing jail process\n");
-		kill(jail_process.pid, SIGTERM);
+		pidfd_send_signal(jail_pidfd, SIGTERM, NULL, 0);
 		uloop_timeout_set(&jail_process_timeout, 1000);
 		uloop_run();
 	}
