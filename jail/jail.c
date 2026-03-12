@@ -163,6 +163,43 @@ static struct {
 	bool ubus_rpc_relay;
 } opts;
 
+const char jail_seccomp[] =
+"{"
+"       \"defaultAction\": \"SCMP_ACT_ERRNO\","
+"       \"defaultErrnoRet\": 1,"
+"       \"syscalls\": ["
+"               {"
+"                       \"names\": ["
+"                               \"accept\","
+"                               \"close\","
+"                               \"connect\","
+"                               \"epoll_ctl\","
+"                               \"epoll_pwait\","
+"                               \"exit_group\","
+"                               \"fcntl\","
+"                               \"getpid\","
+"                               \"getsockopt\","
+"                               \"mmap\","
+"                               \"munmap\","
+"                               \"pidfd_send_signal\","
+"                               \"ppoll\","
+"                               \"read\","
+"                               \"recvmsg\","
+"                               \"rt_sigaction\","
+"                               \"rt_sigprocmask\","
+"                               \"rt_sigreturn\","
+"                               \"sendmsg\","
+"                               \"sendto\","
+"                               \"socket\","
+"                               \"wait4\","
+"                               \"write\","
+"                               \"writev\""
+"                       ],"
+"                       \"action\": \"SCMP_ACT_ALLOW\""
+"               }"
+"       ]"
+"}";
+
 static struct blob_buf ocibuf;
 
 extern int pivot_root(const char *new_root, const char *put_old);
@@ -3204,8 +3241,40 @@ static void pipe_send_start_container(struct uloop_timeout *t)
 	run_hooks(opts.hooks.poststart, post_poststart);
 }
 
+static void drop_privileges(void)
+{
+	struct blob_buf b = { 0 };
+	struct sock_fprog *prog = NULL;
+	struct jail_capset capset = {0};
+
+	/* Ensure syslog is open before we chroot;
+	 * notably, this does not survive logd restarting after being in the
+	 * chroot(), but we'll live with that.
+	 */
+	openlog(NULL, LOG_PID | LOG_CONS | LOG_NDELAY, LOG_DAEMON);
+
+	/* Switch root into ubus's socket folder */
+	chroot("/var/run/ubus");
+
+	/* Drop all capabilities */
+	capset.apply = 1;
+	applyOCIcapabilities(capset, 0);
+
+	/* Setup seccomp */
+	blob_buf_init(&b, 0);
+	if (!blobmsg_add_json_from_string(&b, jail_seccomp)) {
+		blob_buf_free(&b);
+		ERROR("can't process jail_seccomp\n");
+		free_and_exit(-1);
+	}
+	prog = parseOCIlinuxseccomp(b.head);
+	applyOCIlinuxseccomp(prog);
+	blob_buf_free(&b);
+}
+
 static void post_poststart(void)
 {
+	drop_privileges();
 	uloop_run(); /* idle here while jail is running */
 	if (jail_running) {
 		DEBUG("uloop interrupted, killing jail process\n");

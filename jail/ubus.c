@@ -672,7 +672,7 @@ static void ubus_relay_server_cb(struct uloop_fd *fd, unsigned int events)
 		return;
 	}
 
-	ubus_fd = usock(USOCK_UNIX, UBUS_UNIX_SOCKET, NULL);
+	ubus_fd = usock(USOCK_UNIX, "/ubus.sock", NULL);
 	if (ubus_fd < 0) {
 		close(jail_fd);
 		return;
@@ -707,7 +707,7 @@ static void ubus_relay_ubus_connected(struct ubus_relay_server *server) {
 
 static void ubus_relay_ubus_timeout(struct uloop_timeout *ctx) {
 	struct ubus_relay_server *server = container_of(ctx, struct ubus_relay_server, ubus_reconnect_tmo);
-	if (ubus_connect_ctx(&server->ubus, NULL) == 0) {
+	if (ubus_connect_ctx(&server->ubus, "/ubus.sock") == 0) {
 		ubus_relay_ubus_connected(server);
 	} else {
 		uloop_timeout_set(&server->ubus_reconnect_tmo, 1000);
