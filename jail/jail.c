@@ -818,8 +818,6 @@ static void enter_jail_fs(void)
 		ERROR("create_devices() failed\n");
 		free_and_exit(-1);
 	}
-	if (opts.ronly)
-		mount(NULL, "/", "bind", MS_REMOUNT | MS_BIND | MS_RDONLY, 0);
 
 	umask(old_umask);
 	post_jail_fs();
@@ -1182,7 +1180,6 @@ static int exec_jail(void *arg)
 		ERROR("can't write to parent\n");
 		return EXIT_FAILURE;
 	}
-	close(pipes[1]);
 	if (read(pipes[2], buf, 1) < 1) {
 		ERROR("can't read from parent\n");
 		return EXIT_FAILURE;
@@ -1240,10 +1237,26 @@ static void post_jail_fs(void)
 {
 	char buf[1];
 
+	// Let our parent know when we're done setting up the jail.
+	buf[0] = 'D';
+	if (write(pipes[1], buf, 1) < 1) {
+		ERROR("can't write to parent\n");
+		free_and_exit(EXIT_FAILURE);
+	}
+	close(pipes[1]);
+
+	// Wait for the parent to tell us to start.
 	if (read(pipes[2], buf, 1) < 1) {
 		ERROR("can't read from parent\n");
 		free_and_exit(EXIT_FAILURE);
 	}
+
+	// Wait until we're given a green light to "go" to rebind
+	// our filesystem read-only so that the parent can modify our
+	// filesystem after it was setup.
+	if (opts.ronly)
+		mount(NULL, "/", "bind", MS_REMOUNT | MS_BIND | MS_RDONLY, 0);
+
 	if (buf[0] != '!') {
 		ERROR("parent had an error, child exiting\n");
 		free_and_exit(EXIT_FAILURE);
@@ -3067,7 +3080,6 @@ static void post_main(struct uloop_timeout *t)
 			ERROR("can't read from child\n");
 			free_and_exit(-1);
 		}
-		close(pipes[0]);
 		set_oom_score_adj();
 
 		if (opts.ocibundle)
@@ -3123,6 +3135,14 @@ static void post_create_runtime(void)
 	}
 
 	jail_oci_state = OCI_STATE_CREATED;
+
+	// Wait for child to finish setting up their root filesystem
+	if (read(pipes[0], sig_buf, 1) < 0) {
+		ERROR("can't read from child\n");
+		free_and_exit(-1);
+	}
+	close(pipes[0]);
+
 	if (opts.ocibundle && !opts.immediately)
 		uloop_run(); /* wait for 'start' command via ubus */
 	else
