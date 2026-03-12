@@ -27,6 +27,7 @@ struct jail {
 	bool procfs;
 	bool sysfs;
 	bool ubus;
+	bool ubus_rpc;
 	bool log;
 	bool ronly;
 	bool netns;

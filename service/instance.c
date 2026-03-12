@@ -110,6 +110,7 @@ enum {
 	JAIL_ATTR_PROCFS,
 	JAIL_ATTR_SYSFS,
 	JAIL_ATTR_UBUS,
+	JAIL_ATTR_UBUS_RPC,
 	JAIL_ATTR_LOG,
 	JAIL_ATTR_RONLY,
 	JAIL_ATTR_MOUNT,
@@ -130,6 +131,7 @@ static const struct blobmsg_policy jail_attr[__JAIL_ATTR_MAX] = {
 	[JAIL_ATTR_PROCFS] = { "procfs", BLOBMSG_TYPE_BOOL },
 	[JAIL_ATTR_SYSFS] = { "sysfs", BLOBMSG_TYPE_BOOL },
 	[JAIL_ATTR_UBUS] = { "ubus", BLOBMSG_TYPE_BOOL },
+	[JAIL_ATTR_UBUS_RPC] = { "ubus_rpc", BLOBMSG_TYPE_BOOL },
 	[JAIL_ATTR_LOG] = { "log", BLOBMSG_TYPE_BOOL },
 	[JAIL_ATTR_RONLY] = { "ronly", BLOBMSG_TYPE_BOOL },
 	[JAIL_ATTR_MOUNT] = { "mount", BLOBMSG_TYPE_TABLE },
@@ -342,6 +344,9 @@ jail_run(struct service_instance *in, char **argv)
 
 	if (jail->ubus)
 		argv[argc++] = "-u";
+
+	if (jail->ubus_rpc)
+		argv[argc++] = "-Z";
 
 	if (jail->log)
 		argv[argc++] = "-l";
@@ -1186,6 +1191,10 @@ instance_jail_parse(struct service_instance *in, struct blob_attr *attr)
 		jail->ubus = true;
 		jail->argc++;
 	}
+	if (tb[JAIL_ATTR_UBUS_RPC] && blobmsg_get_bool(tb[JAIL_ATTR_UBUS_RPC])) {
+		jail->ubus_rpc = true;
+		jail->argc++;
+	}
 	if (tb[JAIL_ATTR_LOG] && blobmsg_get_bool(tb[JAIL_ATTR_LOG])) {
 		jail->log = true;
 		jail->argc++;
@@ -1759,6 +1768,7 @@ void instance_dump(struct blob_buf *b, struct service_instance *in, int verbose)
 			blobmsg_add_u8(b, "procfs", in->jail.procfs);
 			blobmsg_add_u8(b, "sysfs", in->jail.sysfs);
 			blobmsg_add_u8(b, "ubus", in->jail.ubus);
+			blobmsg_add_u8(b, "ubus_rpc", in->jail.ubus_rpc);
 			blobmsg_add_u8(b, "log", in->jail.log);
 			blobmsg_add_u8(b, "ronly", in->jail.ronly);
 			blobmsg_add_u8(b, "netns", in->jail.netns);

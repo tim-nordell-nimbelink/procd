@@ -55,6 +55,7 @@
 #include "seccomp-oci.h"
 #include "cgroups.h"
 #include "netifd.h"
+#include "ubus.h"
 
 #include <libubox/blobmsg.h>
 #include <libubox/blobmsg_json.h>
@@ -69,9 +70,12 @@
 #endif
 
 #define STACK_SIZE	(1024 * 1024)
-#define OPT_ARGS	"cC:d:e:EfFG:h:ij:J:ln:NoO:pP:r:R:sS:uU:w:t:T:y"
+#define OPT_ARGS	"cC:d:e:EfFG:h:ij:J:ln:NoO:pP:r:R:sS:uU:w:t:T:yZ"
 
 #define OCI_VERSION_STRING "1.0.2"
+
+static const char ubus_folder[] = "/var/run/ubus/";
+static const char ubus_sock[] = "/var/run/ubus/ubus.sock";
 
 struct hook_execvpe {
 	char *file;
@@ -154,6 +158,8 @@ static struct {
 	bool immediately;
 	struct blob_attr *annotations;
 	int term_timeout;
+	bool ubus;
+	bool ubus_rpc_relay;
 } opts;
 
 static struct blob_buf ocibuf;
@@ -1016,6 +1022,7 @@ static void usage(void)
 	fprintf(stderr, "  -s\t\tjail has /sys\n");
 	fprintf(stderr, "  -l\t\tjail has /dev/log\n");
 	fprintf(stderr, "  -u\t\tjail has a ubus socket\n");
+	fprintf(stderr, "  -Z\t\tjail has a ubus relay filtered by RPC ACLs\n");
 	fprintf(stderr, "  -U <name>\tuser to run jailed process\n");
 	fprintf(stderr, "  -G <name>\tgroup to run jailed process\n");
 	fprintf(stderr, "  -o\t\tremont jail root (/) read only\n");
@@ -1256,6 +1263,9 @@ static void post_jail_fs(void)
 	// filesystem after it was setup.
 	if (opts.ronly)
 		mount(NULL, "/", "bind", MS_REMOUNT | MS_BIND | MS_RDONLY, 0);
+
+	if (opts.ubus_rpc_relay)
+		mount(NULL, "/var/run/ubus", "bind", MS_REMOUNT | MS_BIND | MS_RDONLY, 0);
 
 	if (buf[0] != '!') {
 		ERROR("parent had an error, child exiting\n");
@@ -2597,7 +2607,6 @@ int main(int argc, char **argv)
 {
 	uid_t uid = getuid();
 	const char log[] = "/dev/log";
-	const char ubus[] = "/var/run/ubus/ubus.sock";
 	int ret = EXIT_FAILURE;
 	int ch;
 	char *tmp;
@@ -2707,7 +2716,11 @@ int main(int argc, char **argv)
 			break;
 		case 'u':
 			opts.namespace |= CLONE_NEWNS;
-			add_mount_bind(ubus, 0, -1);
+			opts.ubus = true;
+			break;
+		case 'Z':
+			opts.namespace |= CLONE_NEWNS;
+			opts.ubus_rpc_relay = true;
 			break;
 		case 'l':
 			opts.namespace |= CLONE_NEWNS;
@@ -2745,6 +2758,9 @@ int main(int argc, char **argv)
 			break;
 		}
 	}
+
+	if (opts.ubus && opts.ubus_rpc_relay)
+		opts.ubus = false;
 
 	if (opts.namespace && !opts.ocibundle)
 		opts.namespace |= CLONE_NEWIPC | CLONE_NEWPID;
@@ -2974,6 +2990,12 @@ static void post_main(struct uloop_timeout *t)
 			add_mount(NULL, "/dev", "tmpfs", MS_NOATIME | MS_NOEXEC | MS_NOSUID, 0, "size=1M", -1);
 			add_mount(NULL, "/dev/pts", "devpts", MS_NOATIME | MS_NOEXEC | MS_NOSUID, 0, "newinstance,ptmxmode=0666,mode=0620,gid=5", 0);
 
+			if (opts.ubus)
+				add_mount_bind(ubus_sock, 0, -1);
+
+			if (opts.ubus_rpc_relay)
+				add_mount(NULL, ubus_folder, "tmpfs", MS_NOATIME | MS_NOEXEC | MS_NOSUID, 0, "size=1M", -1);
+
 			if (opts.procfs || opts.ocibundle) {
 				add_mount("proc", "/proc", "proc", MS_NOATIME | MS_NODEV | MS_NOEXEC | MS_NOSUID, 0, NULL, -1);
 
@@ -3142,6 +3164,11 @@ static void post_create_runtime(void)
 		free_and_exit(-1);
 	}
 	close(pipes[0]);
+
+	if (opts.ubus_rpc_relay && !ubus_create_relay(jail_process.pid)) {
+		ERROR("Unable to create ubus relay\n");
+		free_and_exit(-1);
+	}
 
 	if (opts.ocibundle && !opts.immediately)
 		uloop_run(); /* wait for 'start' command via ubus */
